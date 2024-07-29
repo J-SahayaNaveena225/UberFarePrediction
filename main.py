@@ -1,103 +1,72 @@
-import pandas as pd
-import numpy as np
-import requests
-import io
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score
-import mysql.connector
-from sqlalchemy import create_engine
+import streamlit as st
 import joblib
+import pandas as pd
+from datetime import datetime
+from streamlit_calendar import calendar
 
-url = "https://caiimowdcnrwheoelnfg.supabase.co/storage/v1/object/public/data/data.csv"
-response = requests.get(url)
-response.raise_for_status()
-df = pd.read_csv(io.StringIO(response.text))
 
-# Step 3: Do the required pre-processing techniques
-def preprocess_data(df):
-    df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
-    df = df.dropna()
-    df = df[(df['fare_amount'] > 0) & (df['fare_amount'] < 1000)]
-    df['hour'] = df['pickup_datetime'].dt.hour
-    df['day'] = df['pickup_datetime'].dt.day
-    df['month'] = df['pickup_datetime'].dt.month
-    df['day_of_week'] = df['pickup_datetime'].dt.dayofweek
-    df['time_segment'] = pd.cut(df['hour'], 
-                                bins=[0, 6, 12, 18, 24], 
-                                labels=['night', 'morning', 'afternoon', 'evening'])
-    df['distance'] = haversine_distance(df['pickup_latitude'], df['pickup_longitude'],
-                                        df['dropoff_latitude'], df['dropoff_longitude'])
-    df['vehicle_type'] = pd.cut(df['passenger_count'], 
-                                bins=[0, 3, 5, np.inf], 
-                                labels=['min', 'mid', 'max'])
-    df = df.dropna()
-    return df
+def load_model():
+    return joblib.load('model.joblib')
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371
-    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-    distance = R * c
-    return distance
 
-df = preprocess_data(df)
+def main():
+    st.set_page_config(page_title="Fare Predictor", page_icon="🚕", layout="wide")
 
-# Step 4: Push the cleaned data to RDS server (PostgreSQL) cloud database
-def push_to_rds(df, table_name):
-    db_url = "postgresql://postgres.caiimowdcnrwheoelnfg:Dina18@&@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
-    engine = create_engine(db_url)
-    
-    try:
-        df.to_sql(table_name, engine, if_exists='replace', index=False)
-        print(f"Data successfully pushed to {table_name}")
-    except Exception as e:
-        print(f"Error pushing data to RDS: {e}")
+    st.title('🚕 Fare Predictor')
 
-push_to_rds(df, 'taxi_data')
+    col1, col2 = st.columns(2)
 
-# Step 5: Pull the cleaned data from cloud server
-def pull_from_rds(table_name):
-    db_url = "postgresql://postgres.caiimowdcnrwheoelnfg:Dina18@&@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
-    engine = create_engine(db_url)
-    
-    try:
-        query = f"SELECT * FROM {table_name}"
-        df = pd.read_sql(query, engine)
-        print(f"Data successfully pulled from {table_name}")
-        return df
-    except Exception as e:
-        print(f"Error pulling data from RDS: {e}")
-        return None
+    with col1:
+        st.subheader("📅 Trip Details")
+        date = st.date_input("Select trip date", datetime.now())
+        time = st.time_input("Select trip time")
 
-df = pull_from_rds('taxi_data')
+        # Convert date and time to required features
+        hour = time.hour
+        day = date.day
+        month = date.month
+        year=date.year
+        day_of_week = date.weekday()
 
-# Step 6: Run the machine learning model and save the model
-def train_and_save_model(df):
-    features = ['hour', 'day', 'month', 'day_of_week', 'distance', 'passenger_count']
-    X = df[features]
-    y = df['fare_amount']
-    
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    
-    y_pred = model.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_test, y_pred)
-    
-    print(f"Root Mean Squared Error: {rmse:.2f}")
-    print(f"R-squared Score: {r2:.2f}")
-    
-    # Save the model
-    joblib.dump(model, 'fare_model.joblib')
-    print("Model saved as fare_model.joblib")
-    
-    return model
+    with col2:
+        st.subheader("🚗 Ride Information")
+        distance = st.number_input('Distance (km)', min_value=0.1, max_value=100.0, value=5.0, step=0.1)
+        passenger_count = st.number_input('Number of passengers', min_value=1, max_value=6, value=2, step=1)
 
-model = train_and_save_model(df)
+    if st.button('Predict Fare', key='predict'):
+        with st.spinner('Calculating fare...'):
+            model = load_model()
+            input_data = pd.DataFrame({
+                'hour': [hour],
+                'day': [day],
+                'month': [month],
+                'year': [year],
+                'day_of_week': [day_of_week],
+                'distance': [distance],
+                'passenger_count': [passenger_count]
+            })
+            prediction = model.predict(input_data)
+
+        st.success(f'💰 The predicted fare is ${prediction[0]:.2f}')
+
+    st.markdown("---")
+    st.subheader("📊 How it works")
+    st.write("""
+    Our fare predictor uses machine learning to estimate trip costs based on:
+    - Date and time of the trip
+    - Distance to be traveled
+    - Number of passengers
+
+    The model is regularly updated with the latest data to ensure accurate predictions.
+    """)
+
+    st.sidebar.image(
+        "https://cdn-icons-png.flaticon.com/512/3097/3097180.png",
+        width=100)
+    st.sidebar.title("About")
+    st.sidebar.info(
+        "This app predicts taxi fares using machine learning. It's designed to help both passengers and drivers estimate trip costs.")
+
+
+if __name__ == '__main__':
+    main()
