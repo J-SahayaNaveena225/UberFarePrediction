@@ -43,7 +43,7 @@ def train_and_save_model(df):
     y_pred = model.predict(x_test)
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
-    r2 = r2_score(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)#coefficient determination
 
     print(f"Root Mean Squared Error: {rmse:.2f}")
     print(f"R-squared Score: {r2:.2f}")
